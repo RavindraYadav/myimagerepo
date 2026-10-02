@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<!-- connect-src is pinned to the API: even if script injection succeeded, the
+     token could not be sent anywhere else. blob: is for the crop preview. -->
+<meta http-equiv="Content-Security-Policy" content="
+  default-src 'none';
+  script-src 'self';
+  style-src 'self';
+  img-src 'self' https://raw.githubusercontent.com blob: data:;
+  connect-src https://api.github.com;
+  manifest-src 'self';
+  base-uri 'none';
+  form-action 'none'">
+<title>Autoposter</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="stylesheet" href="style.css">
+<meta name="theme-color" content="#0B1E3A">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-192.png">
+</head>
+<body>
+
+<header>
+  <h1>Autoposter</h1>
+  <button id="refresh" class="ghost" title="Refresh">&#8635;</button>
+</header>
+
+<nav id="tabs">
+  <button data-view="queue" class="on">Queue</button>
+  <button data-view="new">New post</button>
+  <button data-view="runs">Runs</button>
+  <button data-view="settings">Settings</button>
+</nav>
+
+<p id="banner" hidden></p>
+
+<main>
+  <section id="view-queue" class="view">
+    <p id="queue-summary" class="muted"></p>
+    <div id="queue-list"></div>
+    <p id="queue-empty" class="muted" hidden>Nothing in the queue.</p>
+  </section>
+
+  <section id="view-new" class="view" hidden>
+    <h2>New post</h2>
+    <label for="file">Image</label>
+    <input type="file" id="file" accept="image/*">
+    <div id="crop-row" hidden>
+      <p class="warn" id="crop-note"></p>
+      <label for="ratio">Crop to</label>
+      <select id="ratio">
+        <option value="0.8">Portrait 4:5 (best for feed)</option>
+        <option value="1">Square 1:1</option>
+        <option value="1.91">Landscape 1.91:1</option>
+      </select>
+    </div>
+    <canvas id="preview" hidden></canvas>
+
+    <label for="new-caption">Caption</label>
+    <textarea id="new-caption" rows="7" placeholder="Write the caption…"></textarea>
+    <p class="muted"><span id="new-count">0</span> / 2200</p>
+
+    <label for="new-at">Publish at <span class="muted">(blank = next free slot)</span></label>
+    <input type="datetime-local" id="new-at">
+
+    <label class="row"><input type="checkbox" id="post-now"> Post immediately</label>
+
+    <button id="create" class="primary" disabled>Add to queue</button>
+    <p id="new-status" class="muted"></p>
+  </section>
+
+  <section id="view-runs" class="view" hidden>
+    <div id="runs-list"></div>
+  </section>
+
+  <section id="view-settings" class="view" hidden>
+    <h2>Settings</h2>
+    <p class="muted">Stored encrypted on this device only. Never sent anywhere
+      but api.github.com.</p>
+
+    <label for="owner">GitHub user</label>
+    <input id="owner" autocomplete="off" spellcheck="false">
+    <label for="repo">Code repo <span class="muted">(private)</span></label>
+    <input id="repo" autocomplete="off" spellcheck="false">
+    <label for="mediaRepo">Image repo <span class="muted">(owner/name, public)</span></label>
+    <input id="mediaRepo" autocomplete="off" spellcheck="false">
+
+    <label for="codeToken">Code-repo token</label>
+    <p class="muted">Fine-grained, that repo only. Metadata: Read &middot;
+      <strong>Contents: Read-only</strong> &middot; Actions: Read and write.
+      Contents must stay read-only — with write, this token could rewrite a
+      workflow and read your Instagram secret out of the runner.</p>
+    <input id="codeToken" type="password" autocomplete="off">
+
+    <label for="mediaToken">Image-repo token <span class="muted">(only needed for uploads)</span></label>
+    <p class="muted">Fine-grained, image repo only. Metadata: Read &middot;
+      Contents: Read and write. That repo is public and holds no secrets.</p>
+    <input id="mediaToken" type="password" autocomplete="off">
+
+    <label for="expires">Token expiry <span class="muted">(for the reminder)</span></label>
+    <input type="date" id="expires">
+
+    <button id="save-settings" class="primary">Save</button>
+    <button id="forget" class="danger">Forget everything on this device</button>
+    <p id="settings-status" class="muted"></p>
+    <p class="muted">Revoke a token at
+      github.com/settings/personal-access-tokens — forgetting it here does not
+      revoke it.</p>
+  </section>
+</main>
+
+<template id="tpl-post">
+  <article class="post">
+    <img class="card" alt="" loading="lazy">
+    <div class="body">
+      <p class="when"></p>
+      <p class="status"></p>
+      <p class="error" hidden></p>
+      <textarea class="caption" rows="5"></textarea>
+      <p class="caption-note muted"></p>
+      <div class="actions">
+        <button class="approve primary">Approve</button>
+        <button class="now">Post now</button>
+        <button class="reject danger">Reject</button>
+      </div>
+      <details class="more">
+        <summary>More</summary>
+        <label>Move to</label>
+        <input type="datetime-local" class="at">
+        <button class="move">Reschedule</button>
+        <div class="repair" hidden>
+          <label>Record what actually happened</label>
+          <input class="media-id" placeholder="Instagram media id" autocomplete="off">
+          <button class="mark-published">It published</button>
+          <button class="mark-failed">It failed</button>
+        </div>
+      </details>
+      <p class="op muted" hidden></p>
+    </div>
+  </article>
+</template>
+
+<template id="tpl-run">
+  <article class="run">
+    <span class="dot"></span>
+    <div>
+      <p class="name"></p>
+      <p class="meta muted"></p>
+      <p class="steps muted" hidden></p>
+    </div>
+  </article>
+</template>
+
+<!-- Vendored, not a CDN tag: no supply-chain path to a page holding a
+     token, and it works offline. save_queue emits wrapped block YAML,
+     which is not safe to parse by hand. -->
+<script src="vendor/js-yaml.min.js"></script>
+<script type="module" src="app.js"></script>
+</body>
+</html>
