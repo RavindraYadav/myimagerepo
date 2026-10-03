@@ -11,7 +11,7 @@
   script-src 'self';
   style-src 'self';
   img-src 'self' https://raw.githubusercontent.com blob: data:;
-  connect-src https://api.github.com;
+  connect-src https://api.github.com https://api.anthropic.com https://api.openai.com https://generativelanguage.googleapis.com https://api.x.ai https://api.deepseek.com;
   manifest-src 'self';
   base-uri 'none';
   form-action 'none'">
@@ -46,7 +46,29 @@
   </section>
 
   <section id="view-new" class="view" hidden>
-    <h2>New post</h2>
+    <div class="modes">
+      <button id="mode-image" class="mode on">Use my image</button>
+      <button id="mode-llm" class="mode">Write it with AI</button>
+    </div>
+
+    <div id="llm-pane" hidden>
+      <label for="topic">What should the post be about?</label>
+      <textarea id="topic" rows="3"
+        placeholder="e.g. why flaky tests are usually an environment problem, not a test problem"></textarea>
+      <button id="draft" class="primary">Draft it</button>
+      <p id="llm-status" class="muted"></p>
+
+      <div id="draft-pane" hidden>
+        <label for="headline">Headline <span class="muted">(large text on the card)</span></label>
+        <input id="headline">
+        <label for="bodytext">Card body <span class="muted">(one short statement per line)</span></label>
+        <textarea id="bodytext" rows="4"></textarea>
+        <p class="muted">The card is rendered when you queue it, in the same
+          style as the rest of your posts.</p>
+      </div>
+    </div>
+
+    <div id="image-pane">
     <label for="file">Image</label>
     <input type="file" id="file" accept="image/*">
     <div id="crop-row" hidden>
@@ -59,6 +81,7 @@
       </select>
     </div>
     <canvas id="preview" hidden></canvas>
+    </div>
 
     <label for="new-caption">Caption</label>
     <textarea id="new-caption" rows="7" placeholder="Write the caption…"></textarea>
@@ -74,6 +97,9 @@
   </section>
 
   <section id="view-runs" class="view" hidden>
+    <p class="muted">Every job this system has run, newest first. Each action
+      you take here becomes one of these, and so do the scheduled jobs that
+      publish and look for new images. Failures say where they stopped.</p>
     <div id="runs-list"></div>
   </section>
 
@@ -101,7 +127,22 @@
       Contents: Read and write. That repo is public and holds no secrets.</p>
     <input id="mediaToken" type="password" autocomplete="off">
 
-    <label for="expires">Token expiry <span class="muted">(for the reminder)</span></label>
+    <h2>AI drafting</h2>
+    <p class="muted">Optional — only needed for the "Write it with AI" tab. The
+      call goes straight from this device to the provider, so the key is stored
+      here. Use one with a spend cap: the worst a stolen LLM key does is run up
+      a bill.</p>
+
+    <label for="llmProvider">Provider</label>
+    <select id="llmProvider"></select>
+    <label for="llmModel">Model</label>
+    <input id="llmModel" list="model-list" autocomplete="off" spellcheck="false">
+    <datalist id="model-list"></datalist>
+    <label for="llmKey">API key</label>
+    <input id="llmKey" type="password" autocomplete="off">
+
+    <h2>Token expiry</h2>
+    <label for="expires">Expiry date <span class="muted">(for the reminder)</span></label>
     <input type="date" id="expires">
 
     <button id="save-settings" class="primary">Save</button>

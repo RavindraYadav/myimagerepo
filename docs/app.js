@@ -5,14 +5,16 @@
 // anywhere, on a page that holds a token.
 
 import * as gh from './github.js';
+import { draft as llmDraft, PROVIDERS } from './llm.js';
 import {
-  canApprove, captionProblem, cropBox, EDITABLE, formatSlot, imageName, isDue,
-  makeSerializer, matchRun, MAX_CAPTION, NEEDS_CAPTION, opState, ratioOk,
-  STATUS_HELP,
+  ago, canApprove, captionProblem, cropBox, EDITABLE, formatSlot, imageName,
+  isDue, makeSerializer, matchRun, MAX_CAPTION, NEEDS_CAPTION, opState,
+  OUTCOME_WORD, ratioOk, runMeaning, runOutcome, STATUS_HELP,
 } from './logic.js';
 
 const ACTION_WF = 'instagram-post-action.yml';
 const QUEUE_WF = 'publish-now.yml';
+const DRAFT_WF = 'instagram-draft-post.yml';
 const $ = (sel) => document.querySelector(sel);
 
 const state = {
@@ -35,6 +37,13 @@ function show(view) {
   for (const tab of document.querySelectorAll('#tabs button')) {
     tab.classList.toggle('on', tab.dataset.view === view);
   }
+  // Both of these call the API. Before Settings is filled in there is no
+  // config to call it with, and reaching for cfg.owner threw on the very
+  // first thing a new user does.
+  if (!state.cfg) {
+    if (view !== 'settings') say('Add your repos and a token in Settings first.', 'info');
+    return;
+  }
   if (view === 'runs') refreshRuns();
   if (view === 'new') refreshMedia();
 }
@@ -42,7 +51,10 @@ function show(view) {
 document.querySelectorAll('#tabs button').forEach((b) => {
   b.addEventListener('click', () => show(b.dataset.view));
 });
-$('#refresh').addEventListener('click', () => refreshAll());
+$('#refresh').addEventListener('click', () => {
+  if (!state.cfg) return say('Add your repos and a token in Settings first.', 'info');
+  refreshAll();
+});
 
 // --- ops: optimistic state with a two-gate clear -------------------------
 
@@ -248,32 +260,41 @@ async function refreshRuns() {
   list.textContent = '';
   for (const run of state.runs) {
     const node = $('#tpl-run').content.cloneNode(true);
-    const outcome = run.status === 'completed' ? run.conclusion : run.status;
+    const outcome = runOutcome(run);
     node.querySelector('.dot').dataset.outcome = outcome;
-    node.querySelector('.name').textContent = run.name;
+    // What it did, not what the file is called.
+    node.querySelector('.name').textContent = runMeaning(run.name);
     node.querySelector('.meta').textContent =
-      `${outcome} · ${new Date(run.created_at).toLocaleString()}`;
+      `${OUTCOME_WORD[outcome]} · ${ago(run.created_at)}`;
 
     const steps = node.querySelector('.steps');
-    if (run.conclusion && run.conclusion !== 'success') {
-      node.querySelector('.run').addEventListener('click', async () => {
-        if (!steps.hidden) { steps.hidden = true; return; }
-        const { data } = await gh.listJobs(state.cfg, run.id);
+    if (outcome === 'failed') {
+      // Show the reason without making anyone tap first — being blind to
+      // failures is the thing this tab exists to fix.
+      steps.hidden = false;
+      steps.textContent = 'Finding out why…';
+      gh.listJobs(state.cfg, run.id).then(({ data }) => {
         const failed = (data.jobs || []).flatMap((j) => j.steps || [])
-          .filter((s) => s.conclusion && s.conclusion !== 'success' && s.conclusion !== 'skipped');
+          .filter((s) => s.conclusion && !['success', 'skipped'].includes(s.conclusion));
         steps.textContent = failed.length
-          ? 'Failed: ' + failed.map((s) => s.name).join(', ') : 'No failed step recorded.';
-        steps.hidden = false;
-      });
+          ? 'Failed at: ' + failed.map((s) => s.name).join(', ')
+          : 'No failed step recorded — open the run on GitHub.';
+      }).catch(() => { steps.textContent = 'Could not read the run detail.'; });
     }
     list.append(node);
   }
 
-  // The operator has been repeatedly blind to failures, so a recent red run is
-  // a persistent banner, not something you have to go looking for.
-  const bad = state.runs.find((r) => r.conclusion && r.conclusion !== 'success'
-    && r.conclusion !== 'cancelled' && r.conclusion !== 'skipped');
-  if (bad) say(`"${bad.name}" failed — open Runs for the reason.`);
+  if (!state.runs.length) {
+    const empty = document.createElement('p');
+    empty.className = 'muted';
+    empty.textContent = 'Nothing has run yet.';
+    list.append(empty);
+  }
+
+  // A recent red run is a persistent banner rather than something you have to
+  // go looking for.
+  const bad = state.runs.find((r) => runOutcome(r) === 'failed');
+  if (bad) say(`${runMeaning(bad.name)} — failed ${ago(bad.created_at)}. See Runs.`);
 }
 
 // --- new post ------------------------------------------------------------
@@ -321,6 +342,60 @@ function drawCrop() {
   canvas.toBlob((blob) => { state.cropped = blob; validateNew(); }, 'image/jpeg', 0.9);
 }
 
+
+// --- New post: two ways in ---------------------------------------------
+// "Use my image" uploads a file and queues it. "Write it with AI" drafts the
+// copy here and lets the repo render the card, so the result matches every
+// other post rather than being a second visual style.
+
+let mode = 'image';
+
+function setMode(next) {
+  mode = next;
+  $('#mode-image').classList.toggle('on', next === 'image');
+  $('#mode-llm').classList.toggle('on', next === 'llm');
+  $('#image-pane').hidden = next !== 'image';
+  $('#llm-pane').hidden = next !== 'llm';
+  $('#create').textContent = next === 'llm' ? 'Render and queue' : 'Add to queue';
+  validateNew();
+}
+$('#mode-image').addEventListener('click', () => setMode('image'));
+$('#mode-llm').addEventListener('click', () => setMode('llm'));
+
+let brandVoice = null;
+async function loadVoice() {
+  if (brandVoice !== null) return brandVoice;
+  try {
+    const res = await gh.getFile(state.cfg, 'brand_voice.md', state.branch);
+    brandVoice = res.notModified ? '' : res.data;
+  } catch { brandVoice = ''; }
+  return brandVoice;
+}
+
+$('#draft').addEventListener('click', async () => {
+  const button = $('#draft');
+  const status = $('#llm-status');
+  button.disabled = true;
+  status.textContent = 'Drafting…';
+  status.classList.remove('warn');
+  try {
+    // Pulled from the repo so drafts sound like the rest of the account
+    // instead of like a generic model.
+    const voice = await loadVoice();
+    const out = await llmDraft(state.cfg, $('#topic').value, voice);
+    $('#headline').value = out.headline;
+    $('#bodytext').value = out.body;
+    captionBox.value = out.caption;
+    $('#draft-pane').hidden = false;
+    status.textContent = 'Drafted. Edit anything below, then queue it.';
+  } catch (e) {
+    status.textContent = e.message;
+    status.classList.add('warn');
+  }
+  button.disabled = false;
+  validateNew();
+});
+
 const captionBox = $('#new-caption');
 captionBox.addEventListener('input', validateNew);
 $('#new-at').addEventListener('input', validateNew);
@@ -329,7 +404,8 @@ function validateNew() {
   $('#new-count').textContent = captionBox.value.length;
   const problem = captionProblem(captionBox.value);
   $('#new-count').classList.toggle('warn', captionBox.value.length > MAX_CAPTION);
-  $('#create').disabled = !state.cropped || !!problem;
+  const ready = mode === 'llm' ? !!$('#headline').value.trim() : !!state.cropped;
+  $('#create').disabled = !ready || !!problem;
   return problem;
 }
 
@@ -339,6 +415,36 @@ $('#create').addEventListener('click', async () => {
   button.disabled = true;
 
   try {
+    const postNowLLM = $('#post-now').checked;
+    const atLLM = $('#new-at').value;
+
+    if (mode === 'llm') {
+      // No upload: the card does not exist yet. draft-post renders it on the
+      // repo side, using the same renderer every other card goes through.
+      if (postNowLLM && !confirm('Publish this to Instagram within the minute?')) {
+        button.disabled = false;
+        return;
+      }
+      status.textContent = 'Rendering the card and queueing…';
+      await gh.dispatch(state.cfg, DRAFT_WF, {
+        headline: $('#headline').value,
+        body: $('#bodytext').value,
+        caption: captionBox.value,
+        publish_at: postNowLLM ? '' : (atLLM ? `${atLLM}:00Z` : ''),
+        approve: postNowLLM,
+      }, state.branch);
+      status.textContent = postNowLLM
+        ? 'Sent. It will publish within a minute — watch Runs.'
+        : 'Queued as pending. Approve it from the Queue tab.';
+      $('#topic').value = '';
+      $('#headline').value = '';
+      $('#bodytext').value = '';
+      captionBox.value = '';
+      $('#draft-pane').hidden = true;
+      setTimeout(() => refreshAll(), 25000);
+      return;
+    }
+
     const date = new Date().toISOString().slice(0, 10);
     const name = imageName(captionBox.value, date, mediaNames);
     status.textContent = `Uploading ${name}…`;
@@ -396,11 +502,42 @@ function blobToBase64(blob) {
 
 // --- settings ------------------------------------------------------------
 
-const FIELDS = ['owner', 'repo', 'mediaRepo', 'codeToken', 'mediaToken', 'expires'];
+const FIELDS = ['owner', 'repo', 'mediaRepo', 'codeToken', 'mediaToken',
+                'expires', 'llmProvider', 'llmModel', 'llmKey'];
+
+const providerSelect = $('#llmProvider');
+for (const [key, p] of Object.entries(PROVIDERS)) {
+  const opt = document.createElement('option');
+  opt.value = key;
+  opt.textContent = p.label;
+  providerSelect.append(opt);
+}
+
+function syncModels() {
+  const list = $('#model-list');
+  list.textContent = '';
+  for (const m of (PROVIDERS[providerSelect.value] || {}).models || []) {
+    const opt = document.createElement('option');
+    opt.value = m;
+    list.append(opt);
+  }
+}
+providerSelect.addEventListener('change', () => {
+  syncModels();
+  // Switching provider makes the old model name meaningless, and a stale one
+  // fails at the provider with a confusing message.
+  $('#llmModel').value = (PROVIDERS[providerSelect.value].models || [''])[0];
+});
+syncModels();
 
 $('#save-settings').addEventListener('click', async () => {
-  const cfg = {};
-  for (const f of FIELDS) cfg[f] = $(`#${f}`).value.trim();
+  const cfg = { ...(state.cfg || {}) };
+  for (const f of FIELDS) {
+    const value = $(`#${f}`).value.trim();
+    // Leaving a password box empty keeps the stored secret rather than
+    // clearing it — otherwise editing the repo name would log you out.
+    if (value || !['codeToken', 'mediaToken', 'llmKey'].includes(f)) cfg[f] = value;
+  }
   if (!cfg.owner || !cfg.repo || !cfg.codeToken) {
     return say('GitHub user, code repo and the code-repo token are all required.');
   }
@@ -460,9 +597,13 @@ document.addEventListener('visibilitychange', () => {
     say('Add your repos and a token to get started.', 'info');
     return;
   }
+  // Secrets are never read back into the form — a blank box means "keep what
+  // is stored", the same rule the Streamlit Setup page uses.
+  const SECRET = new Set(['codeToken', 'mediaToken', 'llmKey']);
   for (const f of FIELDS) {
-    if (state.cfg[f] && !f.endsWith('Token')) $(`#${f}`).value = state.cfg[f];
+    if (state.cfg[f] && !SECRET.has(f)) $(`#${f}`).value = state.cfg[f];
   }
+  syncModels();
   await refreshAll();
   startPolling();
 })();

@@ -161,3 +161,51 @@ export function formatSlot(iso) {
 export function isDue(post, now = Date.now()) {
   return new Date(post.publish_at).getTime() <= now;
 }
+
+
+// --- runs, in plain words ------------------------------------------------
+// Workflow names are written for the repo, not for whoever is holding the
+// phone. "Act on an Instagram post" means nothing at a glance; "Applied your
+// change" does.
+
+export const RUN_MEANING = {
+  'Publish due posts': 'Published anything that was due',
+  'Queue and publish a post': 'Queued a post you sent',
+  'Queue a drafted post': 'Rendered and queued an AI-written post',
+  'Act on an Instagram post': 'Applied your approve / reject / edit',
+  'Sync an Instagram issue label': 'Applied a label you set on an issue',
+  'Queue new Instagram images': 'Checked the image repo for new cards',
+  'Open Instagram approval issues': 'Opened approval issues for pending posts',
+  'Render and mirror post images': 'Rendered cards and copied them public',
+  'Refresh Instagram token': 'Renewed the Instagram token',
+  'Refresh the LinkedIn token': 'Renewed the LinkedIn token',
+};
+
+export function runMeaning(name) {
+  return RUN_MEANING[name] || name;
+}
+
+/** 'worked' | 'failed' | 'running' | 'cancelled' — what a human cares about. */
+export function runOutcome(run) {
+  if (run.status !== 'completed') return 'running';
+  if (run.conclusion === 'success') return 'worked';
+  if (run.conclusion === 'cancelled') return 'cancelled';
+  if (run.conclusion === 'skipped') return 'skipped';
+  return 'failed';
+}
+
+export const OUTCOME_WORD = {
+  worked: 'Worked', failed: 'Failed', running: 'Running now',
+  cancelled: 'Cancelled before it ran', skipped: 'Skipped',
+};
+
+export function ago(iso, now = Date.now()) {
+  const secs = Math.max(0, Math.round((now - new Date(iso).getTime()) / 1000));
+  if (secs < 60) return 'just now';
+  const mins = Math.round(secs / 60);
+  if (mins < 60) return `${mins} min ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours} hour${hours === 1 ? '' : 's'} ago`;
+  const days = Math.round(hours / 24);
+  return `${days} day${days === 1 ? '' : 's'} ago`;
+}

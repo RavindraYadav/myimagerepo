@@ -151,16 +151,15 @@ button.ghost { background: none; border: 0; font-size: 22px; min-height: 36px; p
   align-items: start;
   padding: 12px 0;
   border-bottom: 1px solid var(--line);
-  cursor: pointer;
 }
 .run p { margin: 0; }
 .run .name { font-size: 15px; }
 .run .steps { margin-top: 6px; color: var(--bad); }
 .dot { width: 10px; height: 10px; border-radius: 50%; margin-top: 7px; background: var(--muted); }
-.dot[data-outcome="success"] { background: var(--good); }
-.dot[data-outcome="failure"] { background: var(--bad); }
+.dot[data-outcome="worked"] { background: var(--good); }
+.dot[data-outcome="failed"] { background: var(--bad); }
 .dot[data-outcome="cancelled"] { background: var(--warn); }
-.dot[data-outcome="in_progress"], .dot[data-outcome="queued"] { background: var(--accent); }
+.dot[data-outcome="running"] { background: var(--accent); }
 
 #preview { width: 100%; max-width: 280px; border-radius: 8px; margin-top: 12px; display: block; }
 
@@ -168,3 +167,13 @@ button.ghost { background: none; border: 0; font-size: 22px; min-height: 36px; p
   .post { grid-template-columns: 140px 1fr; }
   .post .card { width: 140px; }
 }
+
+.modes { display: flex; gap: 6px; margin: 16px 0 8px; }
+.modes .mode {
+  flex: 1;
+  margin: 0;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
+.modes .mode.on { background: var(--accent); border-color: var(--accent); color: #042c33; font-weight: 600; }

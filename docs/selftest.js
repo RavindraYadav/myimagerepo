@@ -1,5 +1,6 @@
 // One runnable check over the logic that carries real risk. No framework.
 // Run headless:  node docs/selftest.js      Or open docs/selftest.html.
+import { parseDraft } from './llm.js';
 import {
   canApprove, captionProblem, cropBox, imageName, makeSerializer, matchRun,
   MAX_CAPTION, NEEDS_CAPTION, opState, ratioOk, slug,
@@ -81,6 +82,22 @@ check('ignores runs from before the dispatch',
   matchRun(runs, Date.parse('2026-10-05T12:10:00Z')) === null);
 check('tolerates a couple of seconds of clock skew',
   matchRun(runs, Date.parse('2026-10-05T12:05:01Z')).id === 2);
+
+// --- LLM draft parsing: models wrap JSON in fences more often than not ---
+const good = '{"headline":"H","body":"a\\nb","caption":"C"}';
+check('parses plain JSON', parseDraft(good).headline === 'H');
+check('strips a markdown fence', parseDraft('```json\n' + good + '\n```').caption === 'C');
+check('ignores prose around the object',
+  parseDraft('Sure!\n' + good + '\nHope that helps.').headline === 'H');
+check('keeps newlines in the body', parseDraft(good).body === 'a\nb');
+check('body defaults to empty',
+  parseDraft('{"headline":"H","caption":"C"}').body === '');
+let threw = false;
+try { parseDraft('no json here'); } catch { threw = true; }
+check('refuses a reply with no JSON', threw);
+threw = false;
+try { parseDraft('{"headline":"H"}'); } catch { threw = true; }
+check('refuses a draft with no caption', threw);
 
 // --- the serializer: the one genuinely new hazard ---
 const order = [];
